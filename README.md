@@ -1,8 +1,8 @@
 # news-image-20261124
 
 [![make.fun · news-image-20261124](https://make.fun/badge/news-image-20261124.svg)](https://make.fun/bounty/news-image-20261124?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124)
-[![rank](https://make.fun/badge/news-image-20261124/ilham270207/news-image-20261124/rank.svg)](https://make.fun/bounty/news-image-20261124/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124)
-[![reward](https://make.fun/badge/news-image-20261124/ilham270207/news-image-20261124/reward.svg)](https://make.fun/bounty/news-image-20261124?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124)
+[![rank](https://make.fun/badge/news-image-20261124/ilham270207/news-image-20261124-v2/rank.svg)](https://make.fun/bounty/news-image-20261124/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124)
+[![reward](https://make.fun/badge/news-image-20261124/ilham270207/news-image-20261124-v2/reward.svg)](https://make.fun/bounty/news-image-20261124?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124)
 
 `main.py` draws a newspaper front page — **"The World in One Page"** — summing up Tuesday 24 November 2026's world news as a single 1024×1024 PNG. The page is dense and busy, like a morning paper: a lead story, two right-column stories, three middle stories, a sports strip and a BY THE NUMBERS band. Text, layout and every illustration are drawn in code with Pillow (vector shapes only — factory fire, cargo ship, globe, protest crowd, cracked earth, telephone); no photographs, no network, no likenesses of real people. No random numbers, no timestamps. Running it twice writes byte-identical PNGs.
 
