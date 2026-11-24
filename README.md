@@ -30,8 +30,8 @@ Entered on [make.fun](https://make.fun/?ref=vs40zhzs&utm_source=github&utm_mediu
 
 ## Verification (local, 24 Nov 2026)
 
-- `python3 main.py` twice → identical SHA-256 (`f25b30f5d323814d08da1ef3bc3e6420f039056c594d8112501edbff5adfd07b`)
-- Output: 1024×1024 PNG, 164,410 bytes (limit 1 MiB)
+- `python3 main.py` twice → identical SHA-256 (`af3f2d327059e2dbe3bce25d60794850bb84f0378ffbd00a933d52f5ad937446`)
+- Output: 1024×1024 PNG, 126,940 bytes (limit 1 MiB)
 - Visual check: masthead, lead story, right column, three middle stories, sports strip and numbers band all render; every headline and deck complete, no overlaps, all text readable
 - No network access in the program; all artwork is drawn in code.
 

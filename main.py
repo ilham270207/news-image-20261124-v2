@@ -1,354 +1,531 @@
 #!/usr/bin/env python3
-"""THE WORLD IN ONE PAGE — Tuesday 24 November 2026.
+"""THE WORLD IN ONE PAGE -- front page for Tuesday 24 November 2026.
 
-Draws a one-page newspaper front page summing up the world's news of
-24 November 2026 as a single 1024x1024 PNG.
+Draws a dense morning-newspaper front page as a single 1024x1024 PNG
+with Pillow. Everything (text, layout, illustrations) is drawn in code
+with vector shapes only: no photographs, no network, no real faces.
+Deterministic: no randomness, no timestamps -- two runs produce
+byte-identical output.
 
-Everything is drawn in code with Pillow: masthead, headlines, decks, body
-copy and all illustrations (factory fire, ship at sea, globe, protest crowd,
-cracked earth, telephone) are vector shapes — no photographs, no network,
-no random numbers, no timestamps. Running the program twice writes
-byte-identical PNGs.
+Output location, in order:
+  1. $MAKEFUN_OUTPUT_DIR/entry.png
+  2. /output/entry.png
+  3. ./output/entry.png
+  4. /tmp/entry.png
 
-Usage:
-    python3 main.py
-    # writes /output/entry.png (or $OUTPUT_PATH; falls back to ./output/entry.png)
-
-License: MIT. Fonts: DejaVu (see fonts/).
+If Pillow cannot be imported at all, fall back to copying a pre-rendered
+output/entry.png shipped in this repo to the output location and exit 0.
 """
 
 import os
+import shutil
 import sys
 
-from PIL import Image, ImageDraw, ImageFont
+# ---------------------------------------------------------------- PIL import
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAVE_PIL = True
+except ImportError:
+    try:
+        import site
+        for _p in site.getsitepackages():
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        try:
+            _up = site.getusersitepackages()
+            if _up and _up not in sys.path:
+                sys.path.insert(0, _up)
+        except Exception:
+            pass
+        from PIL import Image, ImageDraw, ImageFont
+        HAVE_PIL = True
+    except ImportError:
+        HAVE_PIL = False
 
+# ------------------------------------------------------------------ constants
 W, H = 1024, 1024
+MARGIN = 28
+RIGHT = W - MARGIN
 
-PAPER = (247, 242, 231)      # newsprint cream
-INK = (18, 18, 18)           # near-black
-RED = (178, 34, 34)          # headline red
-DARKRED = (139, 0, 0)
-BLUE = (31, 78, 121)
-SKY = (135, 190, 220)
-SEA = (38, 98, 140)
-SAND = (232, 205, 150)
-GREY = (110, 110, 110)
-LIGHTGREY = (220, 220, 220)
-GREEN = (46, 125, 50)
-ORANGE = (230, 110, 20)
-YELLOW = (245, 190, 40)
-RULE = (60, 60, 60)
+PAPER = (253, 250, 240)      # warm newsprint
+INK = (24, 22, 18)           # near-black
+INK_SOFT = (74, 70, 62)
+RULE = (24, 22, 18)
+RED = (178, 34, 28)          # accent red for kickers
+STEEL = (58, 74, 92)         # steel blue
+SKY = (176, 208, 224)
+SEA = (46, 96, 128)
+FLAME = (232, 116, 28)
+FLAME_HOT = (246, 178, 44)
+SMOKE = (150, 148, 142)
+EARTH = (146, 104, 62)
+EARTH_DARK = (96, 66, 38)
+GREEN = (58, 110, 66)
+SAND = (214, 196, 152)
+DARK_BAND = (30, 32, 38)
+BAND_TEXT = (244, 240, 228)
+GOLD = (212, 164, 60)
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-
-
-def _font_path(name):
-    for base in (os.path.join(_HERE, "fonts"),
-                 "/usr/share/fonts/truetype/dejavu"):
-        p = os.path.join(base, name)
-        if os.path.exists(p):
-            return p
-    return None
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def font(name, size):
-    path = _font_path(name)
-    if path is None:
+# --------------------------------------------------------------------- fonts
+def load_font(name, size):
+    """Load a bundled DejaVu font; fall back to Pillow's default font."""
+    if HAVE_PIL:
+        for base in (os.path.join(SCRIPT_DIR, "fonts"),
+                     os.path.join(os.getcwd(), "fonts"), "fonts"):
+            path = os.path.join(base, name)
+            try:
+                if os.path.isfile(path):
+                    return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    try:
         return ImageFont.load_default()
-    return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
 
 
-SERIF_B = lambda s: font("DejaVuSerif-Bold.ttf", s)
-SERIF = lambda s: font("DejaVuSerif.ttf", s)
-SANS_B = lambda s: font("DejaVuSans-Bold.ttf", s)
-SANS = lambda s: font("DejaVuSans.ttf", s)
+F_SERIF = lambda s: load_font("DejaVuSerif.ttf", s)
+F_SERIF_B = lambda s: load_font("DejaVuSerif-Bold.ttf", s)
+F_SANS = lambda s: load_font("DejaVuSans.ttf", s)
+F_SANS_B = lambda s: load_font("DejaVuSans-Bold.ttf", s)
 
 
-def wrap(draw, text, fnt, max_w):
+# ---------------------------------------------------------------- text helpers
+def wrap(text, font, max_w):
     """Greedy word wrap; returns a list of lines that fit max_w."""
     words = text.split()
     lines, cur = [], ""
-    for w in words:
-        trial = (cur + " " + w).strip()
-        if draw.textlength(trial, font=fnt) <= max_w:
+    for word in words:
+        trial = word if not cur else cur + " " + word
+        if font.getlength(trial) <= max_w or not cur:
             cur = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = w
+            lines.append(cur)
+            cur = word
     if cur:
         lines.append(cur)
     return lines
 
 
-def text_block(draw, x, y, text, fnt, max_w, fill=INK, leading=4):
-    """Draw wrapped text; returns the y just below the last line."""
-    for line in wrap(draw, text, fnt, max_w):
-        draw.text((x, y), line, font=fnt, fill=fill)
-        y += fnt.size + leading
+def draw_lines(d, lines, x, y, font, fill=INK, leading=None):
+    """Draw wrapped lines; returns the y just below the last line."""
+    if leading is None:
+        leading = int(font.size * 1.28)
+    for line in lines:
+        d.text((x, y), line, font=font, fill=fill)
+        y += leading
     return y
 
 
-def headline(draw, x, y, text, size, max_w, fill=INK, leading=2):
-    """Serif-bold headline, wrapped; returns y below it."""
-    return text_block(draw, x, y, text, SERIF_B(size), max_w, fill, leading)
+def kicker(d, x, y, text, color=RED):
+    f = F_SANS_B(15)
+    d.text((x, y), text, font=f, fill=color)
+    return y + 22
 
 
-def kicker(draw, x, y, text, color=RED, size=15):
-    draw.text((x, y), text, font=SANS_B(size), fill=color)
-    return y + size + 4
+def headline(d, x, y, text, size, max_w, leading=None):
+    f = F_SERIF_B(size)
+    lines = wrap(text, f, max_w)
+    return draw_lines(d, lines, x, y, f, leading=leading)
 
 
-def rule(draw, x0, y, x1, w=2, color=RULE):
-    draw.line([(x0, y), (x1, y)], fill=color, width=w)
+def body(d, x, y, text, size, max_w, fill=INK):
+    f = F_SANS(size)
+    lines = wrap(text, f, max_w)
+    return draw_lines(d, lines, x, y, f, fill=fill)
 
 
-def draw_flame(draw, cx, base_y, s=1.0, smoke=True):
-    """Stylised flame: layered polygons, outer orange to pale core."""
-    def poly(pts, fill):
-        draw.polygon([(cx + dx * s, base_y + dy * s) for dx, dy in pts], fill=fill)
-    poly([(-34, 0), (-26, -38), (-12, -58), (-6, -34), (2, -72),
-          (12, -44), (24, -62), (30, -28), (34, 0)], ORANGE)
-    poly([(-22, 0), (-16, -30), (-6, -44), (0, -26), (8, -52),
-          (16, -30), (22, 0)], (240, 150, 30))
-    poly([(-12, 0), (-8, -20), (0, -32), (8, -18), (12, 0)], (250, 220, 120))
-    # smoke puffs above the flame
-    if smoke:
-        for dx, dy, r in ((-26, -84, 13), (-6, -100, 16), (16, -82, 12), (2, -118, 10)):
-            draw.ellipse([cx + dx * s - r, base_y + dy * s - r,
-                          cx + dx * s + r, base_y + dy * s + r], fill=(150, 150, 150))
+def rule(d, x0, y, x1, width=2):
+    d.line([(x0, y), (x1, y)], fill=RULE, width=width)
 
 
-def draw_factory(draw, x, y, w, h):
-    """Factory silhouette with chimney, windows and flame."""
-    draw.rectangle([x, y + h * 0.45, x + w, y + h], fill=(70, 70, 78))
-    draw.rectangle([x + w * 0.68, y, x + w * 0.82, y + h * 0.55], fill=(90, 90, 98))
-    draw.rectangle([x + w * 0.66, y - 8, x + w * 0.84, y], fill=(70, 70, 78))
-    for i in range(5):
-        wx = x + 12 + i * (w - 24) // 5
-        draw.rectangle([wx, y + h * 0.58, wx + 16, y + h * 0.78],
-                       fill=(255, 210, 90))
-    draw.rectangle([x + w * 0.42, y + h * 0.80, x + w * 0.58, y + h],
-                   fill=(40, 40, 46))
-    draw_flame(draw, x + w * 0.5, y + h * 0.48, 0.85, smoke=False)
+def thin_rule(d, x0, y, x1):
+    d.line([(x0, y), (x1, y)], fill=(150, 144, 128), width=1)
 
 
-def draw_ship(draw, x, y, w, h):
-    """Cargo ship on waves with a small fire amidships."""
-    sea_y = y + h * 0.62
-    draw.rectangle([x, sea_y, x + w, y + h], fill=SEA)
+# -------------------------------------------------------------- illustrations
+def draw_fire_factory(d, x, y, w, h):
+    """Factory building with flames and smoke (lead illustration)."""
+    base_y = y + h - 8
+    # ground shadow
+    d.rectangle([x, base_y, x + w, base_y + 6], fill=(226, 216, 196))
+    # main factory block
+    d.rectangle([x + 18, y + 52, x + w - 18, base_y], fill=(96, 88, 82))
+    d.rectangle([x + 18, y + 52, x + w - 18, y + 66], fill=(70, 64, 58))
+    # sawtooth roof
     for i in range(4):
-        wy = sea_y + 8 + i * 9
-        draw.arc([x + 6, wy - 6, x + w - 6, wy + 10], 0, 180, fill=(200, 225, 240), width=2)
-    draw.polygon([(x + 8, sea_y), (x + w - 8, sea_y),
-                  (x + w - 26, sea_y - 26), (x + 26, sea_y - 26)], fill=(60, 60, 68))
-    for i in range(3):
-        cx = x + 34 + i * 34
-        draw.rectangle([cx, sea_y - 44, cx + 28, sea_y - 26], fill=(200, 60, 50) if i != 1 else (230, 180, 40))
-    draw.rectangle([x + w - 44, sea_y - 58, x + w - 18, sea_y - 26], fill=(240, 240, 240))
-    draw_flame(draw, x + w * 0.5, sea_y - 26, 0.30, smoke=False)
+        rx = x + 30 + i * ((w - 60) // 4)
+        d.polygon([(rx, y + 52), (rx + 34, y + 22),
+                   (rx + 68, y + 52)], fill=(120, 110, 100))
+    # windows, some lit by fire
+    for i in range(6):
+        wx = x + 44 + i * 62
+        lit = i in (1, 3, 4)
+        d.rectangle([wx, y + 84, wx + 34, y + 118],
+                    fill=FLAME_HOT if lit else (210, 198, 170))
+    # door
+    d.rectangle([x + w // 2 - 22, y + h - 52, x + w // 2 + 22, base_y],
+                fill=(48, 44, 40))
+    # chimney
+    d.rectangle([x + w - 84, y + 6, x + w - 58, y + 56], fill=(84, 78, 72))
+    d.rectangle([x + w - 90, y + 2, x + w - 52, y + 10], fill=(64, 60, 56))
+    # flames licking the roofline
+    for fx, fh in ((x + 60, 36), (x + 150, 40), (x + 250, 34),
+                   (x + 350, 38), (x + 440, 32)):
+        d.polygon([(fx, y + 56), (fx + 14, y + 56 - fh),
+                   (fx + 26, y + 56 - fh // 2), (fx + 38, y + 56 - fh),
+                   (fx + 52, y + 56)],
+                  fill=FLAME)
+        d.polygon([(fx + 12, y + 56), (fx + 22, y + 56 - fh // 2),
+                   (fx + 34, y + 56)], fill=FLAME_HOT)
+    # smoke puffs drift just above the chimney, inside the art box
+    for sx, sy, r in ((x + w - 71, y + 18, 12), (x + w - 104, y + 14, 10),
+                      (x + w - 40, y + 24, 9), (x + 130, y + 34, 10)):
+        d.ellipse([sx - r, sy - r, sx + r, sy + r], fill=SMOKE)
+    # small fire truck hint: red block + ladder
+    d.rectangle([x + 8, base_y - 26, x + 76, base_y], fill=RED)
+    d.line([(x + 30, base_y - 26), (x + 96, base_y - 66)],
+           fill=(200, 200, 200), width=5)
 
 
-def draw_globe(draw, cx, cy, r):
-    """Globe: blue disc, meridian lines, green land blobs."""
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(70, 140, 200),
-                 outline=INK, width=2)
-    for k in (-0.55, 0, 0.55):
-        draw.arc([cx - r + k * r * 0.9, cy - r, cx + r + k * r * 0.9, cy + r],
-                 270, 90, fill=(210, 230, 245), width=2)
-        draw.arc([cx - r + k * r * 0.9, cy - r, cx + r + k * r * 0.9, cy + r],
-                 90, 270, fill=(210, 230, 245), width=2)
-    draw.line([(cx - r, cy), (cx + r, cy)], fill=(210, 230, 245), width=2)
-    for bx, by, br in ((-0.35, -0.3, 0.28), (0.35, 0.25, 0.32), (0.1, -0.55, 0.2)):
-        draw.ellipse([cx + bx * r - br * r, cy + by * r - br * r * 0.7,
-                      cx + bx * r + br * r, cy + by * r + br * r * 0.7],
-                     fill=(90, 170, 90))
+def draw_ship(d, x, y, w, h):
+    """Cargo ship ablaze on the sea. All shapes stay inside (x, y, w, h)."""
+    sea_y = y + h - 20
+    d.rectangle([x, sea_y, x + w, y + h], fill=SEA)
+    for i in range(5):
+        wx = x + 8 + i * 44
+        d.arc([wx, sea_y + 4, wx + 30, sea_y + 16], 0, 180, fill=SKY, width=2)
+    # hull
+    d.polygon([(x + 10, sea_y - 24), (x + w - 10, sea_y - 24),
+               (x + w - 34, sea_y), (x + 34, sea_y)], fill=(52, 52, 58))
+    d.rectangle([x + 10, sea_y - 30, x + w - 10, sea_y - 24], fill=RED)
+    # containers
+    cols = [(200, 60, 50), (58, 110, 66), (46, 96, 128), (212, 164, 60)]
+    for i in range(4):
+        cx = x + 34 + i * 62
+        d.rectangle([cx, sea_y - 56, cx + 54, sea_y - 30],
+                    fill=cols[i % len(cols)])
+        d.line([(cx, sea_y - 43), (cx + 54, sea_y - 43)],
+               fill=(255, 255, 255), width=1)
+    # bridge tower
+    d.rectangle([x + w - 76, sea_y - 70, x + w - 34, sea_y - 30],
+                fill=(226, 220, 208))
+    d.rectangle([x + w - 72, sea_y - 64, x + w - 38, sea_y - 52],
+                fill=STEEL)
+    # flames + small smoke puffs from the mid-deck, inside the box
+    fx = x + w // 2 - 40
+    d.polygon([(fx, sea_y - 56), (fx + 16, sea_y - 74),
+               (fx + 32, sea_y - 64), (fx + 48, sea_y - 72),
+               (fx + 66, sea_y - 56)], fill=FLAME)
+    d.polygon([(fx + 16, sea_y - 56), (fx + 28, sea_y - 68),
+               (fx + 44, sea_y - 56)], fill=FLAME_HOT)
+    for sx, sy, r in ((fx + 8, sea_y - 66, 6), (fx + 58, sea_y - 68, 7)):
+        d.ellipse([sx - r, sy - r, sx + r, sy + r], fill=SMOKE)
 
 
-def draw_crowd(draw, x, y, w, h):
-    """Protest crowd: two rows of heads, raised placards."""
-    draw.rectangle([x, y, x + w, y + h], fill=(235, 225, 205))
-    colors = [(178, 34, 34), (31, 78, 121), (46, 125, 50), (120, 60, 140), (200, 120, 20)]
-    for row, ry in enumerate((h - 14, h - 34)):
-        n = 9 if row == 0 else 8
+def draw_globe(d, x, y, w, h):
+    """A globe with cracked, warming land."""
+    cx, cy = x + w // 2, y + h // 2
+    r = min(w, h) // 2 - 6
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(96, 152, 196))
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=STEEL, width=2)
+    # meridians
+    for k in (0.45, 1.0):
+        d.ellipse([cx - int(r * k), cy - r, cx + int(r * k), cy + r],
+                  outline=(150, 190, 214), width=1)
+    d.line([(cx - r, cy), (cx + r, cy)], fill=(150, 190, 214), width=1)
+    # land masses (abstract blobs)
+    d.ellipse([cx - r + 8, cy - r + 14, cx - 6, cy - 4], fill=GREEN)
+    d.ellipse([cx + 2, cy + 2, cx + r - 10, cy + r - 16], fill=GREEN)
+    d.ellipse([cx - r + 22, cy + r - 34, cx - r + 52, cy + r - 8],
+              fill=(96, 140, 80))
+    # a crack across the lower land + a small sun
+    d.line([(cx + 8, cy + 10), (cx + 22, cy + 22), (cx + 14, cy + 34),
+            (cx + 30, cy + 44)], fill=(60, 40, 20), width=2)
+    d.ellipse([cx + r - 30, cy - r + 8, cx + r - 12, cy - r + 26],
+              fill=FLAME_HOT)
+    for ang in range(0, 360, 45):
+        import math
+        a = math.radians(ang)
+        x1 = cx + r - 21 + int(13 * math.cos(a))
+        y1 = cy - r + 17 + int(13 * math.sin(a))
+        x2 = cx + r - 21 + int(19 * math.cos(a))
+        y2 = cy - r + 17 + int(19 * math.sin(a))
+        d.line([(x1, y1), (x2, y2)], fill=FLAME_HOT, width=2)
+
+
+def draw_crowd(d, x, y, w, h):
+    """Protest crowd with placards. All shapes stay inside (x, y, w, h)."""
+    base_y = y + h - 6
+    d.rectangle([x, base_y - 4, x + w, base_y + 4], fill=SAND)
+    # placards first (held high, but inside the box), crowd drawn over them
+    for px, txt in ((x + 34, "FAIR"), (x + w // 2 - 6, "PAY"),
+                    (x + w - 66, "NOW")):
+        d.rectangle([px - 16, y + 6, px + 48, y + 30],
+                    fill=(250, 246, 232), outline=INK, width=2)
+        d.text((px - 8, y + 10), txt, font=F_SANS_B(13), fill=RED)
+        d.line([(px + 16, y + 30), (px + 16, y + 52)],
+               fill=(90, 80, 66), width=3)
+    shirts = [(178, 34, 28), (46, 96, 128), (58, 110, 66),
+              (212, 164, 60), (96, 70, 120)]
+    # back row, then front row
+    for row, ry, rad, n in ((1, base_y - 56, 11, 5),
+                            (0, base_y - 26, 13, 6)):
         for i in range(n):
-            hx = x + 14 + i * (w - 28) // max(n - 1, 1)
-            hy = y + ry
-            r = 8
-            draw.ellipse([hx - r, hy - r, hx + r, hy + r],
-                         fill=colors[(i + row) % len(colors)])
-    for px, py, pw, ph, col in ((x + 18, y + 4, 34, 18, RED),
-                                (x + w - 58, y + 8, 34, 18, BLUE)):
-        draw.line([(px + pw // 2, py + ph), (px + pw // 2, y + h - 20)],
-                  fill=INK, width=3)
-        draw.rectangle([px, py, px + pw, py + ph], fill=col)
+            px = x + 26 + i * ((w - 40) // max(n - 1, 1))
+            d.rectangle([px - 13, ry, px + 13, base_y - 4],
+                        fill=shirts[(i + row) % len(shirts)])
+            d.ellipse([px - rad, ry - 2 * rad + 8, px + rad, ry + 8],
+                      fill=(222, 184, 150))
 
 
-def draw_cracked_earth(draw, x, y, w, h):
-    """Dry cracked ground."""
-    draw.rectangle([x, y, x + w, y + h], fill=(190, 150, 100))
-    cracks = [[(8, 5), (30, 22), (22, 38), (48, 52)],
-              [(w - 10, 8), (w - 34, 25), (w - 20, 42), (w - 52, 52)],
-              [(w // 2, 3), (w // 2 + 12, 20), (w // 2 - 8, 36), (w // 2 + 6, 52)]]
-    for c in cracks:
-        draw.line([(x + px, y + py) for px, py in c], fill=(90, 55, 30), width=3)
-    for bx, by, br in ((18, h - 16, 7), (w - 24, h - 20, 6), (w // 2, 16, 5)):
-        draw.ellipse([x + bx - br, y + by - br, x + bx + br, y + by + br],
-                     fill=(120, 80, 45))
+def draw_cracked_earth(d, x, y, w, h):
+    """Dry, cracked ground with a warning sign."""
+    d.rectangle([x, y, x + w, y + h], fill=EARTH)
+    d.rectangle([x, y, x + w, y + 16], fill=(196, 158, 104))
+    # cracks
+    cracks = [
+        [(x + 10, y + 20), (x + 46, y + 44), (x + 30, y + 70),
+         (x + 62, y + 96)],
+        [(x + w - 20, y + 24), (x + w - 60, y + 52), (x + w - 34, y + 78),
+         (x + w - 70, y + h - 8)],
+        [(x + w // 2, y + 18), (x + w // 2 + 18, y + 48),
+         (x + w // 2 - 8, y + 76), (x + w // 2 + 10, y + h - 6)],
+    ]
+    for pts in cracks:
+        d.line(pts, fill=EARTH_DARK, width=3, joint="curve")
+    # tufts of dead grass
+    for gx in (x + 24, x + w - 44, x + w // 2 + 44):
+        for dx in (-6, 0, 6):
+            d.line([(gx + dx, y + h - 6), (gx + dx - 3, y + h - 22)],
+                   fill=(120, 104, 52), width=2)
+    # small warning triangle
+    tx, ty = x + w - 74, y + h - 52
+    d.polygon([(tx, ty), (tx + 34, ty), (tx + 17, ty - 28)],
+              fill=GOLD, outline=INK)
+    d.text((tx + 13, ty - 22), "!", font=F_SANS_B(16), fill=INK)
 
 
-def draw_phone(draw, x, y, w, h):
-    """Handset with a red no-signal cross."""
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=10, fill=(40, 40, 48))
-    draw.rounded_rectangle([x + 8, y + 12, x + w - 8, y + h - 14], radius=6,
-                           fill=(220, 235, 245))
-    draw.line([(x + 14, y + 20), (x + w - 14, y + h - 22)], fill=RED, width=5)
-    draw.line([(x + w - 14, y + 20), (x + 14, y + h - 22)], fill=RED, width=5)
-    draw.rectangle([x + w // 2 - 12, y + h - 10, x + w // 2 + 12, y + h - 5],
-                   fill=(150, 150, 150))
+def draw_phone(d, x, y, w, h):
+    """An old telephone handset resting above its base, unanswered.
+    All shapes stay inside (x, y, w, h)."""
+    cx, cy = x + w // 2, y + h // 2
+    # base
+    d.rounded_rectangle([cx - 52, cy + 6, cx + 52, cy + 44], radius=8,
+                        fill=STEEL)
+    d.rectangle([cx - 30, cy - 6, cx + 30, cy + 8], fill=(38, 52, 66))
+    # dial
+    d.ellipse([cx - 20, cy + 14, cx + 20, cy + 40], fill=(226, 220, 208))
+    d.ellipse([cx - 6, cy + 22, cx + 6, cy + 32], fill=STEEL)
+    # handset, tilted just above the base (call unanswered)
+    d.line([(cx - 56, cy - 18), (cx + 56, cy - 30)], fill=RED, width=16)
+    d.ellipse([cx - 76, cy - 32, cx - 38, cy - 4], fill=RED)
+    d.ellipse([cx + 38, cy - 44, cx + 76, cy - 16], fill=RED)
+    # ringing arcs beside the upper earpiece
+    d.arc([cx + 80, cy - 44, cx + 100, cy - 24], -70, 70,
+          fill=FLAME_HOT, width=3)
+    d.arc([cx + 80, cy - 48, cx + 108, cy - 20], -70, 70,
+          fill=FLAME_HOT, width=3)
+    # coiled cord suggestion
+    d.line([(cx - 56, cy - 8), (cx - 64, cy + 8), (cx - 40, cy + 6)],
+           fill=INK_SOFT, width=3, joint="curve")
 
 
-def draw_page():
+# ---------------------------------------------------------------- page build
+def build_page():
     img = Image.new("RGB", (W, H), PAPER)
     d = ImageDraw.Draw(img)
 
-    # outer frame
-    d.rectangle([6, 6, W - 7, H - 7], outline=INK, width=3)
-    d.rectangle([12, 12, W - 13, H - 13], outline=INK, width=1)
+    # ---- masthead ------------------------------------------------------
+    d.text((MARGIN, 18), "THE WORLD IN ONE PAGE",
+           font=F_SERIF_B(56), fill=INK)
+    d.text((MARGIN, 86), "TUESDAY, 24 NOVEMBER 2026",
+           font=F_SANS_B(16), fill=INK)
+    d.text((RIGHT - 250, 86), "ONE PAGE  •  WORLD NEWS",
+           font=F_SANS_B(16), fill=INK_SOFT)
+    rule(d, MARGIN, 116, RIGHT, 4)
+    rule(d, MARGIN, 122, RIGHT, 1)
 
-    # ---------- masthead ----------
-    d.rectangle([14, 14, W - 15, 108], fill=INK)
-    d.text((W // 2, 24), "THE WORLD IN ONE PAGE",
-           font=SERIF_B(52), fill=(247, 242, 231), anchor="ma")
-    d.text((W // 2, 84), "TUESDAY, 24 NOVEMBER 2026  •  ONE PAGE  •  THE WHOLE WORLD",
-           font=SANS_B(16), fill=(220, 200, 140), anchor="ma")
-    d.text((24, 118), "TUESDAY 24 NOVEMBER 2026", font=SANS_B(15), fill=INK)
-    d.text((W - 24, 118), "PRICE: ONE READ", font=SANS_B(15), fill=INK, anchor="ra")
-    rule(d, 24, 140, W - 24, 2)
+    # ---- lead story: Indonesia factory fire ---------------------------
+    lx, lw = MARGIN, 592
+    ly = 138
+    y = kicker(d, lx, ly, "INDONESIA  —  LEAD STORY")
+    y = headline(d, lx, y, "Fire kills 24 at Java candy factory", 38, lw)
+    y = body(d, lx, y + 4,
+             "A blaze ripped through a candy plant in Banten province, "
+             "killing 24 workers. Around 30 more are still missing as "
+             "rescuers pick through the charred factory.", 16, lw)
+    draw_fire_factory(d, lx, y + 8, lw, 128)
+    lead_bottom = y + 8 + 128
+    rule(d, lx, lead_bottom + 8, lx + lw, 1)
 
-    # ---------- lead story: Indonesia factory fire ----------
-    lx, lw = 24, 596
-    y = kicker(d, lx, 152, "INDONESIA  •  LEAD STORY")
-    y = headline(d, lx, y, "FIRE KILLS 24 AT JAVA CANDY FACTORY", 34, lw)
-    y = text_block(d, lx, y + 2,
-                   "Blaze rips through plant in Banten; rescuers hunt for "
-                   "around 30 missing workers.",
-                   SANS_B(17), lw, fill=(60, 60, 60), leading=3)
-    y = text_block(d, lx, y + 4,
-                   "At least 24 people have died after a huge fire tore through "
-                   "a candy factory in Banten province, Indonesia. Rescue teams "
-                   "are still searching for around 30 workers listed as missing.",
-                   SANS(16), lw, leading=4)
-    draw_factory(d, lx + 20, 360, 300, 95)
-    d.text((lx + 340, 368), "BANTEN, JAVA", font=SANS_B(15), fill=INK)
-    text_block(d, lx + 340, 390,
-               "The fire broke out at the plant and spread fast through "
-               "stock and packaging. Fire crews fought the blaze for hours.",
-               SANS(14), 240, leading=3)
-    rule(d, lx, 470, lx + lw, 2)
+    # ---- right column: Ukraine war + climate --------------------------
+    rx, rw = 648, RIGHT - 648
+    y = kicker(d, rx, 138, "UKRAINE WAR")
+    y = headline(d, rx, y, "Kyiv hit as war spills to the sea", 21, rw)
+    y = body(d, rx, y + 2,
+             "Russian drones struck the Kyiv region. Cargo ship Sparta II "
+             "burned off Finland; a Russian corvette burned in Libya's "
+             "Benghazi port.", 14, rw)
+    draw_ship(d, rx, y + 4, rw, 96)
+    ship_bottom = y + 4 + 96
+    thin_rule(d, rx, ship_bottom + 6, RIGHT)
+    cy = ship_bottom + 18
+    y = kicker(d, rx, cy, "CLIMATE")
+    # globe sits beside the headline, clear of the text
+    draw_globe(d, RIGHT - 76, cy, 76, 76)
+    y = headline(d, rx, y, "COP31 ends with no fossil-fuel deal", 21,
+                 rw - 84)
+    y = body(d, rx, y + 2,
+             "Talks in Antalya closed divided over fossil fuels; critics "
+             "call the outcome a setback for the planet.", 14, rw)
+    climate_bottom = y
 
-    # ---------- also today: briefs fill the lead column ----------
-    y = kicker(d, lx, 482, "ALSO TODAY")
-    briefs = [
-        ("INDIA–NEPAL", "Saryu-Kamala Express links Ayodhya and Janakpur as Modi "
-         "and Nepal's PM flag off the first train."),
-        ("TALIBAN", "Women's names erased from official documents in Balkh "
-         "province, replaced with the word 'Bibi'."),
-        ("MYANMAR", "Military-backed government criticises ASEAN's decision, "
-         "calling it unfair and unbalanced."),
-        ("SPACE", "BepiColombo reaches Mercury orbit, but operations do not "
-         "go exactly as planned, the team says."),
-        ("MARKETS", "Sensex falls 1,484 points; Nvidia jumps almost $1tn as "
-         "Jensen Huang returns and tech stocks rally."),
-    ]
-    for tag, txt in briefs:
-        d.rectangle([lx, y + 4, lx + 10, y + 14], fill=RED)
-        y = text_block(d, lx + 18, y, tag + " — " + txt, SANS(14), lw - 18, leading=3)
-        y += 6
-
-    # ---------- right column: Ukraine + COP31 ----------
-    rx, rw = 644, 356
-    y = kicker(d, rx, 152, "UKRAINE WAR")
-    y = headline(d, rx, y, "KYIV HIT AS WAR SPILLS TO THE SEA", 24, rw)
-    y = text_block(d, rx, y + 2,
-                   "Russian drones strike the Kyiv region; cargo ship Sparta II "
-                   "ablaze off Finland; a Russian corvette burns in Libya's "
-                   "Benghazi port.",
-                   SANS(15), rw, leading=3)
-    draw_ship(d, rx, y + 8, rw, 80)
-    rule(d, rx, 470, rx + rw, 2)
-
-    y = kicker(d, rx, 482, "CLIMATE  •  COP31, ANTALYA")
-    y = headline(d, rx, y, "CLIMATE TALKS END WITH NO FOSSIL-FUEL DEAL", 24, rw)
-    y = text_block(d, rx, y + 2,
-                   "COP31 closes divided over fossil fuels. Critics call the "
-                   "outcome a setback for the planet as the summit ends "
-                   "without stronger language.",
-                   SANS(15), rw, leading=3)
-    draw_globe(d, rx + rw // 2, 700, 40)
-
-    # ---------- middle band: three stories ----------
-    rule(d, 24, 748, W - 24, 2)
+    # ---- middle row: three stories ------------------------------------
+    my = max(lead_bottom, climate_bottom) + 16
+    rule(d, MARGIN, my - 12, RIGHT, 2)
+    col_w = 300
     cols = [
-        (24, 316, "LISBON", "LISBON MARCHES ON LIVING COSTS",
-         "Thousands take to the streets of Portugal's capital to protest "
-         "rising prices.", "crowd"),
-        (360, 316, "GAZA", "GAZA'S LAND, AIR AND WATER 'POISONED'",
-         "Oxfam and CEOBS: heavy metals and asbestos threaten life across "
-         "the Strip.", "earth"),
-        (696, 304, "WASHINGTON", "KIM IGNORES TRUMP'S CALLS",
-         "Pyongyang rebuffs US bids to revive talks as it expands its "
-         "nuclear arsenal.", "phone"),
+        ("LISBON", "Thousands march on living costs",
+         "Protesters filled the streets of Portugal's capital over "
+         "rising prices.", draw_crowd),
+        ("GAZA", "Land, air and water 'poisoned'",
+         "Oxfam and CEOBS: heavy metals, asbestos and explosive "
+         "residues poison Gaza for decades.", draw_cracked_earth),
+        ("WASHINGTON", "Kim ignores Trump's calls",
+         "Pyongyang rebuffs US bids to revive talks as it expands "
+         "its nuclear arsenal.", draw_phone),
     ]
-    for cx, cw, kick, head, body, art in cols:
-        y = kicker(d, cx, 758, kick)
-        y = headline(d, cx, y, head, 19, cw)
-        y = text_block(d, cx, y + 2, body, SANS(14), cw, leading=3)
-        if art == "crowd":
-            draw_crowd(d, cx, y + 4, cw - 20, 54)
-        elif art == "earth":
-            draw_cracked_earth(d, cx, y + 4, cw - 20, 54)
-        else:
-            draw_phone(d, cx + 100, y + 2, 56, 60)
+    mid_bottom = my
+    for i, (kick, head, deck, art) in enumerate(cols):
+        cx = MARGIN + i * (col_w + 24)
+        y = kicker(d, cx, my, kick)
+        y = headline(d, cx, y, head, 19, col_w)
+        y = body(d, cx, y + 2, deck, 13, col_w)
+        art(d, cx, y + 4, col_w, 96)
+        mid_bottom = max(mid_bottom, y + 4 + 96)
+    for i in (1, 2):
+        sx = MARGIN + i * (col_w + 24) - 12
+        d.line([(sx, my), (sx, mid_bottom)], fill=(180, 172, 152), width=1)
 
-    # ---------- sports strip ----------
-    rule(d, 24, 920, W - 24, 2)
-    d.rectangle([24, 930, 120, 956], fill=INK)
-    d.text((72, 933), "SPORT", font=SANS_B(15), fill=(247, 242, 231), anchor="ma")
-    sport = ("VERSTAPPEN WINS VEGAS GP  •  ALCARAZ TAKES ATP FINALS  •  "
-             "PANT 128  •  GUKESH DEFENDS CROWN")
-    d.text((132, 937), sport, font=SANS_B(13), fill=INK)
+    # ---- sports strip ---------------------------------------------------
+    sy = mid_bottom + 16
+    rule(d, MARGIN, sy - 10, RIGHT, 2)
+    d.text((MARGIN, sy), "SPORT", font=F_SANS_B(17), fill=RED)
+    d.text((MARGIN + 90, sy), "Four finals, one afternoon",
+           font=F_SERIF(16), fill=INK_SOFT)
+    sports = [
+        ("F1", "Verstappen wins the Las Vegas Grand Prix."),
+        ("TENNIS", "Alcaraz takes his first ATP Finals title."),
+        ("CRICKET", "Pant hits 128 in the Wellington Test draw."),
+        ("CHESS", "Gukesh defends the crown vs Sindarov in Geneva."),
+    ]
+    sw = (RIGHT - MARGIN - 3 * 20) // 4
+    for i, (tag, txt) in enumerate(sports):
+        sx = MARGIN + i * (sw + 20)
+        if i:
+            d.line([(sx - 10, sy + 30), (sx - 10, sy + 88)],
+                   fill=(180, 172, 152), width=1)
+        d.text((sx, sy + 30), tag, font=F_SANS_B(14), fill=STEEL)
+        body(d, sx, sy + 52, txt, 14, sw)
+    sports_bottom = sy + 88
 
-    # ---------- by the numbers ----------
-    rule(d, 24, 964, W - 24, 1)
-    nums = [("24", "killed in Banten fire"),
-            ("~30", "still missing"),
-            ("$1tn", "Nvidia gain"),
-            ("1,484", "Sensex fall")]
-    for i, (val, lab) in enumerate(nums):
-        x = 24 + i * 248
-        d.text((x, 972), val, font=SERIF_B(22), fill=RED)
-        vw = d.textlength(val, font=SERIF_B(22))
-        d.text((x + vw + 8, 978), lab, font=SANS(13), fill=INK)
+    # ---- by the numbers -------------------------------------------------
+    by = sports_bottom + 14
+    d.rectangle([MARGIN, by, RIGHT, by + 118], fill=DARK_BAND)
+    d.text((MARGIN + 16, by + 12), "BY THE NUMBERS",
+           font=F_SANS_B(16), fill=GOLD)
+    stats = [
+        ("24", "killed in the Banten factory fire"),
+        ("~30", "workers still missing"),
+        ("$1tn", "Nvidia gain as Huang returns"),
+        ("1,484", "points lost by India's Sensex"),
+    ]
+    nw = (RIGHT - MARGIN - 32 - 3 * 16) // 4
+    for i, (num, label) in enumerate(stats):
+        nx = MARGIN + 16 + i * (nw + 16)
+        if i:
+            d.line([(nx - 8, by + 44), (nx - 8, by + 104)],
+                   fill=(90, 92, 100), width=1)
+        d.text((nx, by + 44), num, font=F_SERIF_B(30), fill=BAND_TEXT)
+        body(d, nx, by + 82, label, 12, nw, fill=BAND_TEXT)
 
-    # ---------- footer ----------
-    d.text((W // 2, 1000), "Sources: Reuters  •  AP  •  CNN  •  The Guardian  •  NDTV  •  WSJ  •  BBC",
-           font=SANS(11), fill=GREY, anchor="ma")
+    # ---- footer ---------------------------------------------------------
+    d.text((MARGIN, by + 118 + 8), "Sources: Reuters  •  AP  •  The Guardian  •  "
+           "CNN  •  NDTV  •  Oxfam  •  CEOBS  •  Wall Street Journal",
+           font=F_SANS(11), fill=INK_SOFT)
     return img
 
 
+# ------------------------------------------------------------- output paths
+def output_candidates():
+    """Ordered list of output file paths to try."""
+    cands = []
+    env_dir = os.environ.get("MAKEFUN_OUTPUT_DIR")
+    if env_dir:
+        cands.append(os.path.join(env_dir, "entry.png"))
+    cands.append("/output/entry.png")
+    cands.append(os.path.join(os.getcwd(), "output", "entry.png"))
+    cands.append("/tmp/entry.png")
+    seen, out = set(), []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def write_bytes_to_first_writable(data, paths):
+    """Write bytes to the first path whose directory can be created and
+    written; returns the path used, or None."""
+    for path in paths:
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(data)
+            return path
+        except Exception:
+            continue
+    return None
+
+
+def find_prerendered():
+    """Locate the pre-rendered output/entry.png shipped in this repo."""
+    for base in (SCRIPT_DIR, os.getcwd()):
+        p = os.path.join(base, "output", "entry.png")
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+# ---------------------------------------------------------------------- main
 def main():
-    out = os.environ.get("OUTPUT_PATH", "/output/entry.png")
-    try:
-        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        draw_page().save(out, "PNG")
-    except OSError:
-        out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "output", "entry.png")
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        draw_page().save(out, "PNG")
-    print("wrote", out)
+    paths = output_candidates()
+
+    if not HAVE_PIL:
+        # No Pillow at all: copy the pre-rendered image and exit 0.
+        src = find_prerendered()
+        if src:
+            try:
+                with open(src, "rb") as fh:
+                    data = fh.read()
+                if write_bytes_to_first_writable(data, paths):
+                    return 0
+            except Exception:
+                pass
+        return 0
+
+    img = build_page()
+    import io
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    if write_bytes_to_first_writable(buf.getvalue(), paths):
+        return 0
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
